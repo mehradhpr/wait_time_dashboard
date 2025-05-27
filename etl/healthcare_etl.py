@@ -10,22 +10,11 @@ from datetime import datetime, date
 import re
 from typing import Dict, List, Tuple, Optional
 import warnings
+from config import DatabaseConfig
 warnings.filterwarnings('ignore')
 
-# CONFIGURATION AND SETUP
-# ================================================================
 
-class DatabaseConfig:
-    """Database connection configuration"""
-    def __init__(self):
-        self.server = "localhost"
-        self.database = "HealthcareWaitTimes"
-        self.driver = "{ODBC Driver 17 for SQL Server}"
-        self.trusted_connection = "yes"
-        
-    def get_connection_string(self) -> str:
-        return f"DRIVER={self.driver};SERVER={self.server};DATABASE={self.database};Trusted_Connection={self.trusted_connection};"
-
+# SETUP
 class DataProcessor:
     """Main class for processing healthcare wait times data"""
     
