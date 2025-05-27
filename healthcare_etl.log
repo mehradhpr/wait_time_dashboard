@@ -1,8 +1,0 @@
-2025-05-27 12:16:22,722 - INFO - Starting Healthcare Wait Times ETL Pipeline
-2025-05-27 12:16:22,731 - ERROR - Database connection failed: ('01000', "[01000] [unixODBC][Driver Manager]Can't open lib 'ODBC Driver 18 for SQL Server' : file not found (0) (SQLDriverConnect)")
-2025-05-27 12:20:10,277 - INFO - Starting Healthcare Wait Times ETL Pipeline
-2025-05-27 12:20:10,357 - INFO - Database connection established successfully
-2025-05-27 12:20:10,357 - INFO - Starting data extraction from waittimespriorityproceduresincanada2024datatablesen.xlsx
-2025-05-27 12:20:10,357 - ERROR - Data extraction failed: [Errno 2] No such file or directory: 'waittimespriorityproceduresincanada2024datatablesen.xlsx'
-2025-05-27 12:20:10,357 - ERROR - ETL Pipeline failed: [Errno 2] No such file or directory: 'waittimespriorityproceduresincanada2024datatablesen.xlsx'
-2025-05-27 12:20:10,357 - INFO - Database connection closed

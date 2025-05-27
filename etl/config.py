@@ -53,7 +53,7 @@ class FileConfig:
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
         
         # Data files
-        self.excel_filename = "waittimespriorityproceduresincanada2024datatablesen.xlsx"
+        self.excel_filename = "../database/sample_data/waittimes_sample.xlsx"
         self.excel_file_path = os.path.join(self.base_dir, self.excel_filename)
         
         # Excel sheet configuration
