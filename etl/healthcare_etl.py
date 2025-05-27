@@ -1,45 +1,58 @@
-
-# Purpose: ETL pipeline to load Excel data into SQL Server database
-# Data cleaning, validation, ETL processes, error handling
+# ================================================================
+# HEALTHCARE WAIT TIMES - STREAMLINED ETL PIPELINE
+# ================================================================
+# Purpose: Clean, modular ETL pipeline using configuration management
 
 import pandas as pd
 import numpy as np
 import pyodbc
 import logging
-from datetime import datetime, date
 import re
-from typing import Dict, List, Tuple, Optional
+from datetime import datetime, date
+from typing import Dict, List, Optional
 import warnings
-from config import DatabaseConfig
+
+# Import configurations
+from config import (
+    get_database_config, get_file_config, get_data_config, 
+    get_etl_config, MasterConfig
+)
+
 warnings.filterwarnings('ignore')
 
 
-# SETUP
-class DataProcessor:
-    """Main class for processing healthcare wait times data"""
+class HealthcareETLProcessor:
+    """Streamlined ETL processor for healthcare wait times data"""
     
-    def __init__(self, config: DatabaseConfig):
-        self.config = config
+    def __init__(self):
+        # Load configurations
+        self.config = MasterConfig()
+        self.db_config = self.config.database
+        self.file_config = self.config.files
+        self.data_config = self.config.data
+        self.etl_config = self.config.etl
+        
+        # Initialize connection and logging
         self.connection = None
         self.setup_logging()
         self.data_quality_issues = []
         
     def setup_logging(self):
-        """Configure logging for data processing activities"""
+        """Configure logging using ETL configuration"""
         logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
+            level=getattr(logging, self.etl_config.log_level),
+            format=self.etl_config.log_format,
             handlers=[
-                logging.FileHandler('healthcare_etl.log'),
+                logging.FileHandler(self.file_config.etl_log_file),
                 logging.StreamHandler()
             ]
         )
         self.logger = logging.getLogger(__name__)
         
     def connect_to_database(self) -> bool:
-        """Establish database connection"""
+        """Establish database connection using configuration"""
         try:
-            self.connection = pyodbc.connect(self.config.get_connection_string())
+            self.connection = pyodbc.connect(self.db_config.get_connection_string())
             self.logger.info("Database connection established successfully")
             return True
         except Exception as e:
@@ -52,21 +65,24 @@ class DataProcessor:
             self.connection.close()
             self.logger.info("Database connection closed")
 
-# DATA EXTRACTION AND CLEANING
-# ================================================================
-
-    def extract_excel_data(self, file_path: str) -> pd.DataFrame:
-        """Extract data from the Excel file with proper handling"""
+    def extract_excel_data(self) -> pd.DataFrame:
+        """Extract data from Excel file using file configuration"""
         try:
-            self.logger.info(f"Starting data extraction from {file_path}")
+            self.logger.info(f"Starting data extraction from {self.file_config.excel_filename}")
             
-            # Read the specific sheet with wait times data
+            # Check if file exists
+            if not self.file_config.file_exists():
+                raise FileNotFoundError(f"Excel file not found: {self.file_config.excel_file_path}")
+            
+            # Load Excel configuration
+            excel_config = self.file_config.get_excel_config()
+            
+            # Read Excel file
             df = pd.read_excel(
-                file_path, 
-                sheet_name='Wait times 2008 to 2023',
-                header=2,  # Data starts at row 3 (0-indexed as 2)
-                names=['Reporting_Level', 'Province_Territory', 'Region', 'Indicator', 
-                       'Metric', 'Data_Year', 'Unit', 'Result']
+                excel_config['file_path'],
+                sheet_name=excel_config['sheet_name'],
+                header=excel_config['header'],
+                names=excel_config['names']
             )
             
             self.logger.info(f"Extracted {len(df)} records from Excel file")
@@ -77,7 +93,7 @@ class DataProcessor:
             raise
             
     def clean_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Clean and standardize the extracted data"""
+        """Clean and standardize data using data configuration"""
         self.logger.info("Starting data cleaning process")
         
         original_count = len(df)
@@ -98,34 +114,26 @@ class DataProcessor:
         df['Indicator'] = df['Indicator'].str.strip()
         df = df[df['Indicator'].notna()]
         
-        # Standardize metric names
-        metric_mapping = {
-            '50th Percentile': '50th Percentile',
-            '50th percentile': '50th Percentile',
-            '90th Percentile': '90th Percentile', 
-            '90th percentile': '90th Percentile',
-            '% Meeting Benchmark': '% Meeting Benchmark',
-            '% meeting benchmark': '% Meeting Benchmark',
-            'Volume': 'Volume'
-        }
-        df['Metric'] = df['Metric'].map(metric_mapping).fillna(df['Metric'])
+        # Standardize metric names using configuration
+        df['Metric'] = df['Metric'].apply(self.data_config.standardize_metric_name)
         
-        # Clean and validate years
+        # Clean and validate years using configuration
         df['Data_Year'] = pd.to_numeric(df['Data_Year'], errors='coerce')
-        df = df[(df['Data_Year'] >= 2000) & (df['Data_Year'] <= 2030)]
+        min_year, max_year = self.data_config.valid_year_range
+        df = df[(df['Data_Year'] >= min_year) & (df['Data_Year'] <= max_year)]
         
         # Handle result values
         df['Result'] = df['Result'].replace(['n/a', 'N/A', ''], np.nan)
         df['Result'] = pd.to_numeric(df['Result'], errors='coerce')
         
-        # Add data quality flags
-        df['Data_Quality_Flag'] = 'VALID'
-        df.loc[df['Result'].isna(), 'Data_Quality_Flag'] = 'MISSING'
-        df.loc[df['Result'] < 0, 'Data_Quality_Flag'] = 'INVALID'
+        # Add data quality flags using ETL configuration
+        df['Data_Quality_Flag'] = self.etl_config.quality_flags['VALID']
+        df.loc[df['Result'].isna(), 'Data_Quality_Flag'] = self.etl_config.quality_flags['MISSING']
+        df.loc[df['Result'] < 0, 'Data_Quality_Flag'] = self.etl_config.quality_flags['INVALID']
         
-        # Log data quality issues
-        missing_count = df[df['Data_Quality_Flag'] == 'MISSING'].shape[0]
-        invalid_count = df[df['Data_Quality_Flag'] == 'INVALID'].shape[0]
+        # Log cleaning results
+        missing_count = df[df['Data_Quality_Flag'] == self.etl_config.quality_flags['MISSING']].shape[0]
+        invalid_count = df[df['Data_Quality_Flag'] == self.etl_config.quality_flags['INVALID']].shape[0]
         
         self.logger.info(f"Data cleaning completed:")
         self.logger.info(f"  - Original records: {original_count}")
@@ -136,7 +144,7 @@ class DataProcessor:
         return df
         
     def validate_data(self, df: pd.DataFrame) -> List[str]:
-        """Validate data quality and business rules"""
+        """Validate data quality using data configuration"""
         self.logger.info("Starting data validation")
         issues = []
         
@@ -147,23 +155,25 @@ class DataProcessor:
             if null_count > 0:
                 issues.append(f"{field}: {null_count} null values found")
         
-        # Validate year range
-        invalid_years = df[(df['Data_Year'] < 2008) | (df['Data_Year'] > 2023)].shape[0]
+        # Validate year range using configuration
+        min_year, max_year = self.data_config.valid_year_range
+        invalid_years = df[(df['Data_Year'] < min_year) | (df['Data_Year'] > max_year)].shape[0]
         if invalid_years > 0:
             issues.append(f"Found {invalid_years} records with invalid years")
         
-        # Check for unrealistic wait times (> 2 years)
+        # Check for unrealistic wait times using configuration
         unrealistic_waits = df[
             (df['Metric'].str.contains('Percentile', na=False)) & 
-            (df['Result'] > 730)
+            (df['Result'] > self.data_config.max_wait_time_days)
         ].shape[0]
         if unrealistic_waits > 0:
-            issues.append(f"Found {unrealistic_waits} records with wait times > 2 years")
+            issues.append(f"Found {unrealistic_waits} records with wait times > {self.data_config.max_wait_time_days} days")
         
-        # Check for impossible percentages
+        # Check for impossible percentages using configuration
+        min_pct, max_pct = self.data_config.valid_percentage_range
         invalid_percentages = df[
             (df['Metric'].str.contains('Benchmark', na=False)) & 
-            ((df['Result'] < 0) | (df['Result'] > 100))
+            ((df['Result'] < min_pct) | (df['Result'] > max_pct))
         ].shape[0]
         if invalid_percentages > 0:
             issues.append(f"Found {invalid_percentages} records with invalid percentages")
@@ -175,56 +185,38 @@ class DataProcessor:
             
         return issues
 
-# DIMENSION TABLE POPULATION
-# ================================================================
-
     def populate_provinces(self, df: pd.DataFrame):
-        """Populate the provinces dimension table"""
+        """Populate provinces dimension using data configuration"""
         self.logger.info("Populating provinces dimension table")
         
         # Get unique provinces from data
         provinces = df['Province_Territory'].unique()
-        provinces = [p for p in provinces if pd.notna(p) and p != 'Canada']
+        provinces = [p for p in provinces if pd.notna(p)]
         
-        # Province metadata mapping
-        province_data = {
-            'Alberta': ('AB', 'Western', 4756408, 0),
-            'British Columbia': ('BC', 'Western', 5399118, 0),
-            'Manitoba': ('MB', 'Central', 1418129, 0),
-            'New Brunswick': ('NB', 'Atlantic', 808718, 0),
-            'Newfoundland and Labrador': ('NL', 'Atlantic', 540418, 0),
-            'Nova Scotia': ('NS', 'Atlantic', 1030890, 0),
-            'Ontario': ('ON', 'Central', 15801768, 0),
-            'Prince Edward Island': ('PE', 'Atlantic', 173787, 0),
-            'Quebec': ('QC', 'Central', 8604495, 0),
-            'Saskatchewan': ('SK', 'Western', 1214618, 0)
-        }
-        
-        # Add Canada as a special entry
-        province_data['Canada'] = ('CA', 'National', 39858480, 0)
+        # Add Canada if not present
+        all_provinces = set(list(provinces) + ['Canada'])
         
         cursor = self.connection.cursor()
         
         try:
-            # Clear existing data
             cursor.execute("DELETE FROM dim_provinces")
             
-            # Insert province data
             insert_sql = """
                 INSERT INTO dim_provinces (province_code, province_name, region, population_2023, is_territory)
                 VALUES (?, ?, ?, ?, ?)
             """
             
-            for province in set(list(provinces) + ['Canada']):
-                if province in province_data:
-                    code, region, population, is_territory = province_data[province]
+            for province in all_provinces:
+                province_info = self.data_config.get_province_info(province)
+                if province_info:
+                    code, region, population, is_territory = province_info
                     cursor.execute(insert_sql, (code, province, region, population, is_territory))
                 else:
                     # Handle unknown provinces
                     cursor.execute(insert_sql, ('UNK', province, 'Unknown', None, 0))
             
             self.connection.commit()
-            self.logger.info(f"Inserted {len(set(list(provinces) + ['Canada']))} provinces")
+            self.logger.info(f"Inserted {len(all_provinces)} provinces")
             
         except Exception as e:
             self.connection.rollback()
@@ -234,48 +226,24 @@ class DataProcessor:
             cursor.close()
             
     def populate_procedures(self, df: pd.DataFrame):
-        """Populate the procedures dimension table"""
+        """Populate procedures dimension using data configuration"""
         self.logger.info("Populating procedures dimension table")
         
         # Get unique procedures
         procedures = df['Indicator'].dropna().unique()
         
-        # Procedure categorization
-        procedure_categories = {
-            'Bladder Cancer Surgery': ('BLAD_SURG', 'Cancer Surgery', 'High'),
-            'Breast Cancer Surgery': ('BRST_SURG', 'Cancer Surgery', 'High'),
-            'Colorectal Cancer Surgery': ('CLRC_SURG', 'Cancer Surgery', 'High'),
-            'CABG': ('CABG', 'Cardiac Surgery', 'High'),
-            'CT Scan': ('CT_SCAN', 'Diagnostic Imaging', 'Medium'),
-            'Cataract Surgery': ('CAT_SURG', 'Ophthalmology', 'Medium'),
-            'Cataract surgery': ('CAT_SURG_2', 'Ophthalmology', 'Medium'),
-            'Hip Fracture Repair': ('HIP_FRAC', 'Orthopedic Surgery', 'High'),
-            'Hip Replacement': ('HIP_REPL', 'Orthopedic Surgery', 'Medium'),
-            'Knee Replacement': ('KNEE_REPL', 'Orthopedic Surgery', 'Medium'),
-            'MRI Scan': ('MRI_SCAN', 'Diagnostic Imaging', 'Medium')
-        }
-        
         cursor = self.connection.cursor()
         
         try:
-            # Clear existing data
             cursor.execute("DELETE FROM dim_procedures")
             
-            # Insert procedure data
             insert_sql = """
                 INSERT INTO dim_procedures (procedure_code, procedure_name, procedure_category, clinical_priority)
                 VALUES (?, ?, ?, ?)
             """
             
             for procedure in procedures:
-                if procedure in procedure_categories:
-                    code, category, priority = procedure_categories[procedure]
-                else:
-                    # Generate code for unknown procedures
-                    code = re.sub(r'[^A-Z0-9]', '_', procedure.upper())[:10]
-                    category = 'Other'
-                    priority = 'Medium'
-                
+                code, category, priority = self.data_config.get_procedure_info(procedure)
                 cursor.execute(insert_sql, (code, procedure, category, priority))
             
             self.connection.commit()
@@ -289,34 +257,24 @@ class DataProcessor:
             cursor.close()
             
     def populate_metrics(self, df: pd.DataFrame):
-        """Populate the metrics dimension table"""
+        """Populate metrics dimension using data configuration"""
         self.logger.info("Populating metrics dimension table")
-        
-        # Define metrics with their properties
-        metrics_data = [
-            ('PCT_50', '50th Percentile', 'Percentile', 'Days', 0),
-            ('PCT_90', '90th Percentile', 'Percentile', 'Days', 0),
-            ('BENCH_MET', '% Meeting Benchmark', 'Benchmark_Compliance', 'Percentage', 1),
-            ('VOLUME', 'Volume', 'Volume', 'Number of cases', None)
-        ]
         
         cursor = self.connection.cursor()
         
         try:
-            # Clear existing data
             cursor.execute("DELETE FROM dim_metrics")
             
-            # Insert metrics data
             insert_sql = """
                 INSERT INTO dim_metrics (metric_code, metric_name, metric_type, unit_of_measurement, higher_is_better)
                 VALUES (?, ?, ?, ?, ?)
             """
             
-            for code, name, metric_type, unit, higher_better in metrics_data:
+            for code, name, metric_type, unit, higher_better in self.data_config.metrics_data:
                 cursor.execute(insert_sql, (code, name, metric_type, unit, higher_better))
             
             self.connection.commit()
-            self.logger.info(f"Inserted {len(metrics_data)} metrics")
+            self.logger.info(f"Inserted {len(self.data_config.metrics_data)} metrics")
             
         except Exception as e:
             self.connection.rollback()
@@ -326,7 +284,7 @@ class DataProcessor:
             cursor.close()
             
     def populate_time_periods(self, df: pd.DataFrame):
-        """Populate the time periods dimension table"""
+        """Populate time periods dimension"""
         self.logger.info("Populating time periods dimension table")
         
         # Get unique years from data
@@ -335,10 +293,8 @@ class DataProcessor:
         cursor = self.connection.cursor()
         
         try:
-            # Clear existing data
             cursor.execute("DELETE FROM dim_time_periods")
             
-            # Insert time period data
             insert_sql = """
                 INSERT INTO dim_time_periods (fiscal_year, calendar_year, quarter, year_quarter, 
                                             is_current_year, fiscal_year_start_date, fiscal_year_end_date)
@@ -371,11 +327,8 @@ class DataProcessor:
         finally:
             cursor.close()
 
-# FACT TABLE POPULATION
-# ================================================================
-
     def populate_fact_table(self, df: pd.DataFrame):
-        """Populate the main fact table with wait times data"""
+        """Populate fact table with optimized batch processing"""
         self.logger.info("Populating fact table")
         
         cursor = self.connection.cursor()
@@ -389,7 +342,7 @@ class DataProcessor:
             # Clear existing fact data
             cursor.execute("DELETE FROM fact_wait_times")
             
-            # Insert fact data
+            # Prepare batch insert
             insert_sql = """
                 INSERT INTO fact_wait_times (
                     province_id, procedure_id, metric_id, time_id, result_value, 
@@ -400,7 +353,9 @@ class DataProcessor:
             
             successful_inserts = 0
             failed_inserts = 0
+            batch_data = []
             
+            # Process data in batches using configuration
             for _, row in df.iterrows():
                 try:
                     # Get dimension IDs
@@ -412,25 +367,35 @@ class DataProcessor:
                         failed_inserts += 1
                         continue
                     
-                    # Get time_id (using year and Q1 as default)
+                    # Get time_id
                     time_id = self.get_time_id(int(row['Data_Year']), 1)
                     
                     # Prepare values
                     result_value = row['Result'] if pd.notna(row['Result']) else None
                     volume_cases = result_value if row['Metric'] == 'Volume' else None
                     
-                    cursor.execute(insert_sql, (
+                    # Add to batch
+                    batch_data.append((
                         province_id, procedure_id, metric_id, time_id,
                         result_value, volume_cases, row['Data_Quality_Flag'],
-                        row['Reporting_Level'], 'waittimespriorityproceduresincanada2024datatablesen.xlsx'
+                        row['Reporting_Level'], self.etl_config.source_file_name
                     ))
                     
-                    successful_inserts += 1
+                    # Execute batch when reaching batch size
+                    if len(batch_data) >= self.data_config.batch_size:
+                        cursor.executemany(insert_sql, batch_data)
+                        successful_inserts += len(batch_data)
+                        batch_data = []
                     
                 except Exception as e:
                     failed_inserts += 1
-                    if failed_inserts < 10:  # Log first few errors
+                    if failed_inserts <= self.etl_config.max_errors_to_log:
                         self.logger.warning(f"Failed to insert row: {str(e)}")
+            
+            # Execute remaining batch
+            if batch_data:
+                cursor.executemany(insert_sql, batch_data)
+                successful_inserts += len(batch_data)
             
             self.connection.commit()
             self.logger.info(f"Fact table population completed:")
@@ -460,24 +425,31 @@ class DataProcessor:
         result = cursor.fetchone()
         return result[0] if result else None
 
-# MAIN ETL PIPELINE
-# ================================================================
-
-    def run_etl_pipeline(self, excel_file_path: str) -> bool:
+    def run_etl_pipeline(self) -> bool:
         """Execute the complete ETL pipeline"""
         try:
             self.logger.info("Starting Healthcare Wait Times ETL Pipeline")
+            
+            # Validate configuration
+            if not self.config.validate_configuration():
+                self.logger.error("Configuration validation failed")
+                return False
             
             # Step 1: Connect to database
             if not self.connect_to_database():
                 return False
             
             # Step 2: Extract data from Excel
-            raw_data = self.extract_excel_data(excel_file_path)
+            raw_data = self.extract_excel_data()
             
             # Step 3: Clean and validate data
             clean_data = self.clean_data(raw_data)
             validation_issues = self.validate_data(clean_data)
+            
+            # Check if data quality meets minimum standards
+            data_completeness = len(clean_data[clean_data['Data_Quality_Flag'] == self.etl_config.quality_flags['VALID']]) / len(clean_data)
+            if data_completeness < self.data_config.min_data_completeness:
+                self.logger.warning(f"Data completeness ({data_completeness:.1%}) below minimum threshold ({self.data_config.min_data_completeness:.1%})")
             
             # Step 4: Populate dimension tables
             self.populate_provinces(clean_data)
@@ -491,6 +463,9 @@ class DataProcessor:
             # Step 6: Generate summary report
             self.generate_load_summary()
             
+            # Step 7: Run basic quality checks
+            self.run_post_load_validation()
+            
             self.logger.info("ETL Pipeline completed successfully")
             return True
             
@@ -501,183 +476,120 @@ class DataProcessor:
             self.disconnect_from_database()
             
     def generate_load_summary(self):
-        """Generate a summary report of the data load"""
+        """Generate comprehensive load summary using configuration"""
         cursor = self.connection.cursor()
         
-        # Get record counts
-        cursor.execute("SELECT COUNT(*) FROM dim_provinces")
-        province_count = cursor.fetchone()[0]
+        # Get record counts for all tables
+        table_counts = {}
+        tables_to_check = ['dim_provinces', 'dim_procedures', 'dim_metrics', 'dim_time_periods', 'fact_wait_times']
         
-        cursor.execute("SELECT COUNT(*) FROM dim_procedures")
-        procedure_count = cursor.fetchone()[0]
+        for table in tables_to_check:
+            cursor.execute(f"SELECT COUNT(*) FROM {table}")
+            table_counts[table] = cursor.fetchone()[0]
         
-        cursor.execute("SELECT COUNT(*) FROM dim_metrics")
-        metric_count = cursor.fetchone()[0]
-        
-        cursor.execute("SELECT COUNT(*) FROM dim_time_periods")
-        time_count = cursor.fetchone()[0]
-        
-        cursor.execute("SELECT COUNT(*) FROM fact_wait_times")
-        fact_count = cursor.fetchone()[0]
-        
+        # Get valid fact records count
         cursor.execute("SELECT COUNT(*) FROM fact_wait_times WHERE result_value IS NOT NULL")
         valid_fact_count = cursor.fetchone()[0]
         
-        # Log summary
-        self.logger.info("=" * 50)
-        self.logger.info("DATA LOAD SUMMARY")
-        self.logger.info("=" * 50)
-        self.logger.info(f"Provinces loaded: {province_count}")
-        self.logger.info(f"Procedures loaded: {procedure_count}")
-        self.logger.info(f"Metrics loaded: {metric_count}")
-        self.logger.info(f"Time periods loaded: {time_count}")
-        self.logger.info(f"Fact records loaded: {fact_count}")
-        self.logger.info(f"Valid fact records: {valid_fact_count}")
-        self.logger.info(f"Data completeness: {(valid_fact_count/fact_count*100):.1f}%")
+        # Calculate data completeness
+        fact_count = table_counts['fact_wait_times']
+        completeness = (valid_fact_count / fact_count * 100) if fact_count > 0 else 0
+        
+        # Log detailed summary
+        self.logger.info("=" * 60)
+        self.logger.info("ETL PIPELINE EXECUTION SUMMARY")
+        self.logger.info("=" * 60)
+        self.logger.info(f"Configuration: {self.config.environment.upper()} environment")
+        self.logger.info(f"Data Source: {self.file_config.excel_filename}")
+        self.logger.info(f"Database: {self.db_config.server}/{self.db_config.database}")
+        self.logger.info(f"Load Timestamp: {datetime.now().strftime(self.etl_config.load_timestamp_format)}")
+        self.logger.info("")
+        self.logger.info("Table Population Results:")
+        for table, count in table_counts.items():
+            self.logger.info(f"  - {table}: {count:,} records")
+        self.logger.info("")
+        self.logger.info(f"Data Quality Metrics:")
+        self.logger.info(f"  - Total fact records: {fact_count:,}")
+        self.logger.info(f"  - Valid fact records: {valid_fact_count:,}")
+        self.logger.info(f"  - Data completeness: {completeness:.1f}%")
         
         if self.data_quality_issues:
-            self.logger.info(f"Data quality issues found: {len(self.data_quality_issues)}")
+            self.logger.info(f"  - Data quality issues: {len(self.data_quality_issues)}")
+            for issue in self.data_quality_issues[:5]:  # Show first 5 issues
+                self.logger.info(f"    • {issue}")
         
-        self.logger.info("=" * 50)
+        self.logger.info("=" * 60)
+    
+    def run_post_load_validation(self):
+        """Run basic validation checks after data load"""
+        self.logger.info("Running post-load validation checks")
+        
+        try:
+            # Import and run quick validation
+            from data_quality_checker import quick_data_validation
+            
+            is_valid = quick_data_validation(self.connection)
+            
+            if is_valid:
+                self.logger.info("✓ Post-load validation passed")
+            else:
+                self.logger.warning("⚠ Post-load validation issues detected")
+                
+        except ImportError:
+            self.logger.info("Data quality checker not available - skipping post-load validation")
+        except Exception as e:
+            self.logger.warning(f"Post-load validation failed: {str(e)}")
 
-# UTILITY FUNCTIONS
-# ================================================================
 
 def main():
-    """Main execution function"""
-    # Configuration
-    config = DatabaseConfig()
-    processor = DataProcessor(config)
+    """Main execution function with enhanced error handling"""
+    try:
+        # Print configuration summary if in debug mode
+        config = MasterConfig()
+        if config.debug_mode:
+            config.print_configuration_summary()
+        
+        # Initialize and run ETL processor
+        processor = HealthcareETLProcessor()
+        success = processor.run_etl_pipeline()
+        
+        if success:
+            print("✅ ETL Pipeline completed successfully!")
+            print(f"📊 Check '{processor.file_config.etl_log_file}' for detailed processing information.")
+            print(f"📁 Reports available in: {processor.file_config.reports_dir}")
+            
+            # Optionally run comprehensive quality checks
+            try:
+                from data_quality_checker import run_quality_checks
+                print("\n🔍 Running comprehensive data quality checks...")
+                quality_results = run_quality_checks(export_report=True)
+                
+                passed_checks = sum(1 for r in quality_results.values() 
+                                   if isinstance(r, dict) and r.get('status') == 'PASSED')
+                total_checks = len([r for r in quality_results.values() 
+                                   if isinstance(r, dict) and 'status' in r])
+                
+                print(f"✅ Quality checks completed: {passed_checks}/{total_checks} passed")
+                if 'report_exported_to' in quality_results:
+                    print(f"📋 Quality report: {quality_results['report_exported_to']}")
+                    
+            except ImportError:
+                print("📝 Comprehensive quality checker not available")
+            except Exception as e:
+                print(f"⚠️ Quality check failed: {str(e)}")
+                
+        else:
+            print("❌ ETL Pipeline failed!")
+            print(f"🔍 Check logs for details: {processor.file_config.etl_log_file}")
+            return 1
+            
+    except Exception as e:
+        print(f"❌ Critical error: {str(e)}")
+        return 1
     
-    # File path to your Excel file
-    excel_file_path = "waittimespriorityproceduresincanada2024datatablesen.xlsx"
-    
-    # Run the ETL pipeline
-    success = processor.run_etl_pipeline(excel_file_path)
-    
-    if success:
-        print("ETL Pipeline completed successfully!")
-        print("Check 'healthcare_etl.log' for detailed processing information.")
-    else:
-        print("ETL Pipeline failed. Check logs for details.")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
-
-# ADDITIONAL UTILITY SCRIPTS
-# ================================================================
-
-class DataQualityChecker:
-    """Additional data quality checking utilities"""
-    
-    def __init__(self, connection):
-        self.connection = connection
-        
-    def run_quality_checks(self):
-        """Run comprehensive data quality checks"""
-        cursor = self.connection.cursor()
-        
-        checks = [
-            ("Referential Integrity", self.check_referential_integrity),
-            ("Data Completeness", self.check_data_completeness),
-            ("Business Rule Validation", self.check_business_rules),
-            ("Statistical Outliers", self.check_statistical_outliers)
-        ]
-        
-        results = {}
-        for check_name, check_function in checks:
-            try:
-                results[check_name] = check_function()
-                print(f"✓ {check_name}: PASSED")
-            except Exception as e:
-                results[check_name] = f"FAILED: {str(e)}"
-                print(f"✗ {check_name}: FAILED - {str(e)}")
-                
-        return results
-        
-    def check_referential_integrity(self):
-        """Check foreign key relationships"""
-        cursor = self.connection.cursor()
-        
-        # Check for orphaned fact records
-        cursor.execute("""
-            SELECT COUNT(*) FROM fact_wait_times f
-            LEFT JOIN dim_provinces p ON f.province_id = p.province_id
-            WHERE p.province_id IS NULL
-        """)
-        orphaned_provinces = cursor.fetchone()[0]
-        
-        if orphaned_provinces > 0:
-            raise Exception(f"Found {orphaned_provinces} fact records with invalid province_id")
-            
-        return "All referential integrity checks passed"
-        
-    def check_data_completeness(self):
-        """Check for data completeness across dimensions"""
-        cursor = self.connection.cursor()
-        
-        cursor.execute("""
-            SELECT 
-                COUNT(*) as total_records,
-                COUNT(result_value) as records_with_values,
-                CAST(COUNT(result_value) * 100.0 / COUNT(*) AS DECIMAL(5,2)) as completeness_pct
-            FROM fact_wait_times
-        """)
-        
-        total, with_values, completeness = cursor.fetchone()
-        
-        if completeness < 70:  # Less than 70% completeness
-            raise Exception(f"Data completeness too low: {completeness}%")
-            
-        return f"Data completeness: {completeness}% ({with_values}/{total} records)"
-        
-    def check_business_rules(self):
-        """Validate business-specific rules"""
-        cursor = self.connection.cursor()
-        
-        # Check for impossible wait times (negative or > 3 years)
-        cursor.execute("""
-            SELECT COUNT(*) FROM fact_wait_times f
-            JOIN dim_metrics m ON f.metric_id = m.metric_id
-            WHERE m.metric_name LIKE '%Percentile%' 
-            AND (f.result_value < 0 OR f.result_value > 1095)
-        """)
-        
-        invalid_waits = cursor.fetchone()[0]
-        
-        if invalid_waits > 0:
-            raise Exception(f"Found {invalid_waits} records with impossible wait times")
-            
-        return "All business rules validated"
-        
-    def check_statistical_outliers(self):
-        """Identify statistical outliers that may indicate data issues"""
-        cursor = self.connection.cursor()
-        
-        cursor.execute("""
-            WITH stats AS (
-                SELECT 
-                    AVG(result_value) as mean_val,
-                    STDEV(result_value) as std_val
-                FROM fact_wait_times 
-                WHERE result_value IS NOT NULL
-            )
-            SELECT COUNT(*) FROM fact_wait_times f, stats s
-            WHERE f.result_value IS NOT NULL
-            AND ABS(f.result_value - s.mean_val) > 4 * s.std_val
-        """)
-        
-        extreme_outliers = cursor.fetchone()[0]
-        
-        return f"Found {extreme_outliers} extreme statistical outliers (>4 standard deviations)"
-
-# Usage example for data quality checking
-def run_quality_checks():
-    config = DatabaseConfig()
-    connection = pyodbc.connect(config.get_connection_string())
-    
-    checker = DataQualityChecker(connection)
-    results = checker.run_quality_checks()
-    
-    connection.close()
-    return results
+    exit_code = main()
+    exit(exit_code)
