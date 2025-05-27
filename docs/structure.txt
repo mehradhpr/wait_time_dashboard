@@ -1,0 +1,113 @@
+healthcare-wait-times-analytics/
+│
+├── README.md
+├── requirements.txt
+├── .env.example
+├── .gitignore
+│
+├── data/
+│   ├── raw/
+│   │   └── wait_times_data.xlsx
+│   ├── processed/
+│   └── exports/
+│
+├── database/
+│   ├── schema/
+│   │   ├── 01_create_tables.sql
+│   │   ├── 02_reference_data.sql
+│   │   └── 03_indexes_views.sql
+│   ├── stored_procedures/
+│   │   ├── sp_wait_time_trends.sql
+│   │   ├── sp_provincial_comparison.sql
+│   │   └── sp_benchmark_analysis.sql
+│   └── migrations/
+│
+├── src/
+│   ├── __init__.py
+│   ├── config/
+│   │   ├── __init__.py
+│   │   ├── database.py
+│   │   └── settings.py
+│   │
+│   ├── etl/
+│   │   ├── __init__.py
+│   │   ├── extract.py
+│   │   ├── transform.py
+│   │   ├── load.py
+│   │   └── pipeline.py
+│   │
+│   ├── database/
+│   │   ├── __init__.py
+│   │   ├── connection.py
+│   │   ├── models.py
+│   │   └── queries.py
+│   │
+│   ├── analytics/
+│   │   ├── __init__.py
+│   │   ├── wait_time_analyzer.py
+│   │   ├── trend_analysis.py
+│   │   ├── benchmark_calculator.py
+│   │   └── statistical_tests.py
+│   │
+│   ├── visualization/
+│   │   ├── __init__.py
+│   │   ├── dashboard.py
+│   │   ├── charts.py
+│   │   ├── maps.py
+│   │   └── reports.py
+│   │
+│   └── utils/
+│       ├── __init__.py
+│       ├── data_validation.py
+│       ├── logging_config.py
+│       └── helpers.py
+│
+├── dashboard/
+│   ├── app.py
+│   ├── callbacks.py
+│   ├── layouts/
+│   │   ├── __init__.py
+│   │   ├── main_layout.py
+│   │   ├── sidebar.py
+│   │   └── components.py
+│   ├── assets/
+│   │   ├── styles.css
+│   │   └── custom.js
+│   └── static/
+│       └── images/
+│
+├── notebooks/
+│   ├── 01_data_exploration.ipynb
+│   ├── 02_trend_analysis.ipynb
+│   ├── 03_provincial_comparison.ipynb
+│   └── 04_predictive_modeling.ipynb
+│
+├── tests/
+│   ├── __init__.py
+│   ├── test_etl/
+│   │   ├── __init__.py
+│   │   ├── test_extract.py
+│   │   ├── test_transform.py
+│   │   └── test_load.py
+│   ├── test_analytics/
+│   │   ├── __init__.py
+│   │   └── test_calculations.py
+│   └── test_data/
+│       └── sample_wait_times.xlsx
+│
+├── scripts/
+│   ├── setup_database.py
+│   ├── run_etl.py
+│   ├── generate_reports.py
+│   └── deploy.sh
+│
+├── docs/
+│   ├── architecture.md
+│   ├── database_design.md
+│   ├── api_documentation.md
+│   └── user_guide.md
+│
+└── logs/
+    ├── etl_pipeline.log
+    ├── application.log
+    └── error.log
