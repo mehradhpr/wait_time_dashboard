@@ -1,12 +1,11 @@
 """
 Database Connection Management
-Description: Database connection utilities split from ETL pipeline
 """
 
 import psycopg2
 from psycopg2.extras import RealDictCursor, execute_batch
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 import os
 
 logger = logging.getLogger(__name__)
@@ -34,13 +33,13 @@ class DatabaseConnection:
             self.connection.close()
             logger.info("Database connection closed")
             
-    def execute_query(self, query: str, params: Optional[Tuple] = None):
+    def execute_query(self, query: str, params: Optional[Tuple] = None) -> List[Dict[str, Any]]:
         """Execute a single query"""
         with self.connection.cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute(query, params)
             if cursor.description:
                 return cursor.fetchall()
-            return None
+            return []
             
     def execute_batch(self, query: str, data: List[Tuple]):
         """Execute batch insert/update operations"""

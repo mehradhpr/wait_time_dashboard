@@ -1,5 +1,5 @@
 """
-Healthcare Analytics Database Setup Script - Fixed
+Healthcare Analytics Database Setup Script
 Description: Automated database setup with proper imports and paths
 """
 
@@ -99,6 +99,8 @@ class DatabaseSetup:
             'database/schema/01_create_tables.sql',
             'database/schema/02_reference_data.sql',
             'database/stored_procedures/sp_wait_time_trends.sql',
+            'database/stored_procedures/sp_provincial_comparison.sql',
+            'database/stored_procedures/sp_benchmark_analysis.sql',
             'database/views/analytical_views.sql'
         ]
         
@@ -120,23 +122,25 @@ class DatabaseSetup:
             data_file = 'data/raw/wait_times_data.xlsx'
             if not os.path.exists(data_file):
                 logger.warning(f"Data file not found: {data_file}")
-                logger.info("Skipping data load - place wait_times_data.xlsx in data/raw/")
-                return True
+                logger.info("Generating sample data...")
+                
+                # Generate sample data
+                subprocess.check_call([sys.executable, "scripts/generate_sample_data.py"])
             
             # Import and run ETL pipeline
-            from etl.pipeline import run_etl
+            try:
+                from etl.pipeline import run_etl
+                
+                db_params = dict(self.db_params)
+                db_params['database'] = self.db_name
+                
+                stats = run_etl(data_file, db_params)
+                logger.info(f"Initial data load completed: {stats}")
+                return True
+            except ImportError:
+                logger.warning("ETL modules not available yet. Skipping data load.")
+                return True
             
-            db_params = dict(self.db_params)
-            db_params['database'] = self.db_name
-            
-            stats = run_etl(data_file, db_params)
-            logger.info(f"Initial data load completed: {stats}")
-            return True
-            
-        except ImportError as e:
-            logger.error(f"Could not import ETL modules: {e}")
-            logger.info("ETL modules may not be properly installed")
-            return True  # Don't fail setup for this
         except Exception as e:
             logger.error(f"Error loading initial data: {e}")
             return False
@@ -223,7 +227,7 @@ def run_tests():
         # Test imports (optional - don't fail if modules not ready)
         try:
             from database.connection import DatabaseConnection
-            from etl.extract import extract_data
+            from analytics.wait_time_analyzer import WaitTimeAnalyzer
             logger.info("Import tests passed")
         except ImportError:
             logger.warning("Some modules not yet available - this is normal during initial setup")
@@ -279,7 +283,7 @@ def main():
     logger.info("Healthcare Analytics setup completed successfully!")
     logger.info("Next steps:")
     logger.info("1. Update .env file with your database credentials")
-    logger.info("2. Place your wait_times_data.xlsx file in data/raw/")
+    logger.info("2. Run: python scripts/generate_sample_data.py (if using sample data)")
     logger.info("3. Run: python dashboard/app.py to start the dashboard")
     logger.info("4. Access dashboard at: http://localhost:8050")
 
