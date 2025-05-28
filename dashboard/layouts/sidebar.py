@@ -1,4 +1,3 @@
-# dashboard/layouts/sidebar.py
 """
 Dashboard Sidebar Layout
 """

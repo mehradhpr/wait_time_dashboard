@@ -1,4 +1,3 @@
-# dashboard/layouts/main_layout.py
 """
 Main Dashboard Layout Structure
 """
