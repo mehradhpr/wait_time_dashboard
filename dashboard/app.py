@@ -5,39 +5,33 @@ Created: 2025-05-27
 Description: Dash-based interactive dashboard for wait time analytics
 """
 
+import sys
+from pathlib import Path
+
+# Add src to path for imports
+sys.path.append(str(Path(__file__).parent.parent / 'src'))
+
 import dash
 from dash import dcc, html, Input, Output, callback, dash_table
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
-import psycopg2
-from psycopg2.extras import RealDictCursor
-import os
-from datetime import datetime, date
+from datetime import datetime
 import dash_bootstrap_components as dbc
-from src.analytics.wait_time_analyzer import WaitTimeAnalyzer
+from analytics.wait_time_analyzer import WaitTimeAnalyzer
+from config.database import db_manager
+from config.settings import APP_CONFIG
 import logging
 
 logger = logging.getLogger(__name__)
-
-# Database connection
-def get_db_connection():
-    return psycopg2.connect(
-        host=os.getenv('DB_HOST', 'localhost'),
-        database=os.getenv('DB_NAME', 'healthcare_analytics'),
-        user=os.getenv('DB_USER', 'postgres'),
-        password=os.getenv('DB_PASSWORD', 'your_password'),
-        port=os.getenv('DB_PORT', 5432)
-    )
 
 # Initialize the Dash app
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 app.title = "Healthcare Wait Times Analytics"
 
 # Initialize analytics
-db_conn = get_db_connection()
-analyzer = WaitTimeAnalyzer(db_conn)
+analyzer = WaitTimeAnalyzer(db_manager)
 
 # Define color scheme
 COLORS = {
@@ -74,10 +68,12 @@ def create_header():
 def create_summary_cards():
     """Create summary statistics cards"""
     try:
-        with db_conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            cursor.execute("SELECT * FROM mv_dashboard_summary")
-            summary_data = cursor.fetchall()
-            
+        query = "SELECT * FROM mv_dashboard_summary"
+        summary_data = db_manager.execute_query(query)
+        
+        if not summary_data:
+            return html.Div("No summary data available", className="alert alert-warning")
+        
         cards = []
         for item in summary_data:
             cards.append(
@@ -100,19 +96,21 @@ def create_summary_cards():
 def get_filter_options():
     """Get options for dropdown filters"""
     try:
-        with db_conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            # Get provinces
-            cursor.execute("SELECT DISTINCT province_name FROM dim_provinces WHERE province_name != 'Canada' ORDER BY province_name")
-            provinces = [{'label': row['province_name'], 'value': row['province_name']} for row in cursor.fetchall()]
-            
-            # Get procedures
-            cursor.execute("SELECT DISTINCT procedure_name FROM dim_procedures ORDER BY procedure_name")
-            procedures = [{'label': row['procedure_name'], 'value': row['procedure_name']} for row in cursor.fetchall()]
-            
-            # Get years
-            cursor.execute("SELECT DISTINCT data_year FROM fact_wait_times WHERE data_year IS NOT NULL ORDER BY data_year DESC")
-            years = [{'label': str(row['data_year']), 'value': row['data_year']} for row in cursor.fetchall()]
-            
+        # Get provinces
+        provinces_query = "SELECT DISTINCT province_name FROM dim_provinces WHERE province_name != 'Canada' ORDER BY province_name"
+        provinces_data = db_manager.execute_query(provinces_query)
+        provinces = [{'label': row['province_name'], 'value': row['province_name']} for row in provinces_data]
+        
+        # Get procedures
+        procedures_query = "SELECT DISTINCT procedure_name FROM dim_procedures ORDER BY procedure_name"
+        procedures_data = db_manager.execute_query(procedures_query)
+        procedures = [{'label': row['procedure_name'], 'value': row['procedure_name']} for row in procedures_data]
+        
+        # Get years
+        years_query = "SELECT DISTINCT data_year FROM fact_wait_times WHERE data_year IS NOT NULL ORDER BY data_year DESC"
+        years_data = db_manager.execute_query(years_query)
+        years = [{'label': str(row['data_year']), 'value': row['data_year']} for row in years_data]
+        
         return provinces, procedures, years
         
     except Exception as e:
@@ -172,7 +170,6 @@ app.layout = dbc.Container([
         dbc.Tab(label="Overview", tab_id="overview-tab"),
         dbc.Tab(label="Trends", tab_id="trends-tab"),
         dbc.Tab(label="Provincial Comparison", tab_id="comparison-tab"),
-        dbc.Tab(label="Benchmark Analysis", tab_id="benchmark-tab"),
         dbc.Tab(label="Insights", tab_id="insights-tab")
     ], id="main-tabs", active_tab="overview-tab", className="mb-4"),
     
@@ -204,8 +201,6 @@ def render_tab_content(active_tab, province, procedure, year_range):
         return create_trends_content(province, procedure, year_range)
     elif active_tab == "comparison-tab":
         return create_comparison_content(province, procedure, year_range)
-    elif active_tab == "benchmark-tab":
-        return create_benchmark_content(province, procedure, year_range)
     elif active_tab == "insights-tab":
         return create_insights_content(province, procedure, year_range)
     
@@ -228,56 +223,23 @@ def create_overview_content(province, procedure, year_range):
         if df.empty:
             return html.Div("No data available for selected filters", className="alert alert-warning")
         
-        # Create visualizations
-        # 1. Wait time distribution by procedure
-        fig_distribution = px.box(
-            df, 
-            x='procedure_name', 
-            y='wait_time_value',
-            title="Wait Time Distribution by Procedure",
+        # Create simple bar chart showing average wait times by procedure
+        avg_by_procedure = df.groupby('procedure_name')['wait_time_value'].mean().reset_index()
+        avg_by_procedure = avg_by_procedure.sort_values('wait_time_value', ascending=True)
+        
+        fig_overview = px.bar(
+            avg_by_procedure, 
+            x='wait_time_value', 
+            y='procedure_name',
+            orientation='h',
+            title="Average Wait Times by Procedure",
             labels={'wait_time_value': 'Wait Time (Days)', 'procedure_name': 'Procedure'}
-        )
-        fig_distribution.update_xaxis(tickangle=45)
-        
-        # 2. Provincial comparison heatmap
-        if province == 'all':
-            pivot_data = df.pivot_table(
-                values='wait_time_value', 
-                index='province_name', 
-                columns='procedure_name', 
-                aggfunc='mean'
-            )
-            
-            fig_heatmap = px.imshow(
-                pivot_data,
-                title="Average Wait Times by Province and Procedure (Days)",
-                labels=dict(x="Procedure", y="Province", color="Days"),
-                aspect="auto"
-            )
-        else:
-            fig_heatmap = html.Div("Provincial heatmap available when 'All Provinces' is selected")
-        
-        # 3. Recent trends
-        recent_data = df[df['data_year'] >= max(df['data_year']) - 2]
-        fig_recent = px.line(
-            recent_data.groupby(['data_year', 'procedure_name'])['wait_time_value'].mean().reset_index(),
-            x='data_year',
-            y='wait_time_value',
-            color='procedure_name',
-            title="Recent Wait Time Trends (Last 3 Years)",
-            labels={'wait_time_value': 'Average Wait Time (Days)', 'data_year': 'Year'}
         )
         
         return html.Div([
             dbc.Row([
                 dbc.Col([
-                    dcc.Graph(figure=fig_distribution)
-                ], width=12)
-            ], className="mb-4"),
-            
-            dbc.Row([
-                dbc.Col([
-                    dcc.Graph(figure=fig_heatmap) if not isinstance(fig_heatmap, html.Div) else fig_heatmap
+                    dcc.Graph(figure=fig_overview)
                 ], width=12, md=8),
                 dbc.Col([
                     html.H5("Data Summary"),
@@ -286,12 +248,6 @@ def create_overview_content(province, procedure, year_range):
                     html.P(f"Median Wait Time: {df['wait_time_value'].median():.1f} days"),
                     html.P(f"Range: {df['wait_time_value'].min():.1f} - {df['wait_time_value'].max():.1f} days"),
                 ], width=12, md=4)
-            ], className="mb-4"),
-            
-            dbc.Row([
-                dbc.Col([
-                    dcc.Graph(figure=fig_recent)
-                ], width=12)
             ])
         ])
         
@@ -315,81 +271,20 @@ def create_trends_content(province, procedure, year_range):
         if df.empty:
             return html.Div("No data available for trend analysis", className="alert alert-warning")
         
-        # Calculate trends
-        trends = analyzer.calculate_trend_analysis(df)
+        # Simple trend chart
+        trend_data = df.groupby(['data_year', 'procedure_name'])['wait_time_value'].mean().reset_index()
         
-        if not trends:
-            return html.Div("Insufficient data for trend analysis", className="alert alert-warning")
-        
-        # Create trend visualization
-        trend_summary = []
-        for key, trend_data in trends.items():
-            trend_summary.append({
-                'Province': trend_data['province'],
-                'Procedure': trend_data['procedure'],
-                'Trend': trend_data['trend_category'],
-                'Change (%)': trend_data['percent_change'],
-                'R²': trend_data['r_squared'],
-                'Current Wait': trend_data['last_year_wait']
-            })
-        
-        trend_df = pd.DataFrame(trend_summary)
-        
-        # Trend direction pie chart
-        trend_counts = trend_df['Trend'].value_counts()
-        fig_pie = px.pie(
-            values=trend_counts.values,
-            names=trend_counts.index,
-            title="Distribution of Trend Directions"
-        )
-        
-        # Scatter plot of change vs R-squared
-        fig_scatter = px.scatter(
-            trend_df,
-            x='Change (%)',
-            y='R²',
-            color='Trend',
-            hover_data=['Province', 'Procedure'],
-            title="Trend Reliability vs Magnitude of Change"
+        fig_trend = px.line(
+            trend_data,
+            x='data_year',
+            y='wait_time_value',
+            color='procedure_name',
+            title="Wait Time Trends Over Time",
+            labels={'wait_time_value': 'Average Wait Time (Days)', 'data_year': 'Year'}
         )
         
         return html.Div([
-            dbc.Row([
-                dbc.Col([
-                    dcc.Graph(figure=fig_pie)
-                ], width=12, md=6),
-                dbc.Col([
-                    dcc.Graph(figure=fig_scatter)
-                ], width=12, md=6)
-            ], className="mb-4"),
-            
-            dbc.Row([
-                dbc.Col([
-                    html.H5("Detailed Trend Analysis"),
-                    dash_table.DataTable(
-                        data=trend_df.to_dict('records'),
-                        columns=[{"name": i, "id": i, "type": "numeric", "format": {"specifier": ".1f"}} 
-                               if i in ['Change (%)', 'R²', 'Current Wait'] 
-                               else {"name": i, "id": i} for i in trend_df.columns],
-                        sort_action="native",
-                        filter_action="native",
-                        page_size=10,
-                        style_cell={'textAlign': 'left'},
-                        style_data_conditional=[
-                            {
-                                'if': {'filter_query': '{Trend} = Increasing'},
-                                'backgroundColor': '#ffebee',
-                                'color': 'black',
-                            },
-                            {
-                                'if': {'filter_query': '{Trend} = Decreasing'},
-                                'backgroundColor': '#e8f5e8',
-                                'color': 'black',
-                            }
-                        ]
-                    )
-                ], width=12)
-            ])
+            dcc.Graph(figure=fig_trend)
         ])
         
     except Exception as e:
@@ -419,146 +314,13 @@ def create_comparison_content(province, procedure, year_range):
             labels={'wait_time': 'Wait Time (Days)', 'province': 'Province'}
         )
         
-        # Add national average line
-        fig_comparison.add_hline(
-            y=comparison_data['national_average'],
-            line_dash="dash",
-            line_color="red",
-            annotation_text=f"National Average: {comparison_data['national_average']:.1f} days"
-        )
-        
         return html.Div([
-            dbc.Row([
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            html.H5("Best Performer"),
-                            html.H3(comparison_data['best_province']['name'], className="text-success"),
-                            html.P(f"{comparison_data['best_province']['wait_time']:.1f} days")
-                        ])
-                    ])
-                ], width=6, md=3),
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            html.H5("National Average"),
-                            html.H3(f"{comparison_data['national_average']:.1f}", className="text-primary"),
-                            html.P("days")
-                        ])
-                    ])
-                ], width=6, md=3),
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            html.H5("Range"),
-                            html.H3(f"{comparison_data['statistics']['range']:.1f}", className="text-warning"),
-                            html.P("days")
-                        ])
-                    ])
-                ], width=6, md=3),
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            html.H5("Needs Focus"),
-                            html.H3(comparison_data['worst_province']['name'], className="text-danger"),
-                            html.P(f"{comparison_data['worst_province']['wait_time']:.1f} days")
-                        ])
-                    ])
-                ], width=6, md=3)
-            ], className="mb-4"),
-            
-            dbc.Row([
-                dbc.Col([
-                    dcc.Graph(figure=fig_comparison)
-                ], width=12)
-            ])
+            dcc.Graph(figure=fig_comparison)
         ])
         
     except Exception as e:
         logger.error(f"Error creating comparison content: {e}")
         return html.Div(f"Error loading comparison: {str(e)}", className="alert alert-danger")
-
-def create_benchmark_content(province, procedure, year_range):
-    """Create benchmark analysis tab content"""
-    try:
-        province_filter = None if province == 'all' else province
-        benchmark_data = analyzer.benchmark_analysis(province_filter, year_range[1])
-        
-        if 'error' in benchmark_data:
-            return html.Div(f"Error: {benchmark_data['error']}", className="alert alert-warning")
-        
-        # Create benchmark compliance chart
-        df_benchmark = pd.DataFrame(benchmark_data['by_procedure'])
-        
-        if df_benchmark.empty:
-            return html.Div("No benchmark data available", className="alert alert-warning")
-        
-        fig_benchmark = px.scatter(
-            df_benchmark,
-            x='median_wait',
-            y='compliance',
-            size='volume',
-            color='category',
-            hover_data=['province', 'procedure'],
-            title="Benchmark Compliance vs Median Wait Time",
-            labels={'median_wait': 'Median Wait Time (Days)', 'compliance': 'Benchmark Compliance (%)'}
-        )
-        
-        # Add benchmark target line
-        fig_benchmark.add_hline(y=90, line_dash="dash", line_color="green", annotation_text="90% Target")
-        
-        return html.Div([
-            # Summary cards
-            dbc.Row([
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            html.H5("Average Compliance"),
-                            html.H3(f"{benchmark_data['summary']['avg_compliance']:.1f}%", 
-                                   className="text-primary"),
-                        ])
-                    ])
-                ], width=6, md=3),
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            html.H5("Excellent (≥90%)"),
-                            html.H3(str(benchmark_data['compliance_distribution']['excellent']), 
-                                   className="text-success"),
-                        ])
-                    ])
-                ], width=6, md=3),
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            html.H5("Poor (<50%)"),
-                            html.H3(str(benchmark_data['compliance_distribution']['poor']), 
-                                   className="text-danger"),
-                        ])
-                    ])
-                ], width=6, md=3),
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            html.H5("Total Procedures"),
-                            html.H3(str(benchmark_data['summary']['total_procedures']), 
-                                   className="text-info"),
-                        ])
-                    ])
-                ], width=6, md=3)
-            ], className="mb-4"),
-            
-            # Benchmark chart
-            dbc.Row([
-                dbc.Col([
-                    dcc.Graph(figure=fig_benchmark)
-                ], width=12)
-            ])
-        ])
-        
-    except Exception as e:
-        logger.error(f"Error creating benchmark content: {e}")
-        return html.Div(f"Error loading benchmark data: {str(e)}", className="alert alert-danger")
 
 def create_insights_content(province, procedure, year_range):
     """Create insights and recommendations tab content"""
@@ -614,4 +376,8 @@ def create_insights_content(province, procedure, year_range):
         return html.Div(f"Error loading insights: {str(e)}", className="alert alert-danger")
 
 if __name__ == '__main__':
-    app.run_server(debug=True, host='0.0.0.0', port=8050)
+    app.run_server(
+        debug=APP_CONFIG['debug'], 
+        host=APP_CONFIG['dashboard_host'], 
+        port=APP_CONFIG['dashboard_port']
+    )
